@@ -1312,18 +1312,42 @@ def render_seo_tab(analysis):
     # Content Structure
     if seo.content_structure:
         st.markdown("### 📐 Content Structure")
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         
         with col1:
-            st.metric("Headings", seo.content_structure.total_headings)
+            heading_status = "✅" if seo.content_structure.total_headings >= 3 else "⚠️"
+            st.metric("Total Headings", f"{heading_status} {seo.content_structure.total_headings}")
         with col2:
-            st.metric("Paragraphs", seo.content_structure.paragraph_count)
+            h1_status = "✅" if seo.content_structure.h1_count == 1 else "⚠️"
+            st.metric("H1 Headings", f"{h1_status} {seo.content_structure.h1_count}")
         with col3:
-            st.metric("Word Count", seo.content_structure.word_count)
+            para_status = "✅" if seo.content_structure.paragraph_count >= 3 else "⚠️"
+            st.metric("Paragraphs", f"{para_status} {seo.content_structure.paragraph_count}")
+        with col4:
+            # Get word count from content length (characters / 5 avg)
+            word_count = seo.content_structure.content_length // 5 if seo.content_structure.content_length > 0 else 0
+            wc_status = "✅" if word_count >= 300 else "⚠️"
+            st.metric("Est. Words", f"{wc_status} {word_count}")
+        
+        # Heading breakdown
+        st.markdown("#### Heading Distribution")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("H1", seo.content_structure.h1_count)
+        with col2:
+            st.metric("H2", seo.content_structure.h2_count)
+        with col3:
+            st.metric("H3", seo.content_structure.h3_count)
+        
+        # Hierarchy check
+        if seo.content_structure.proper_hierarchy:
+            st.success("✅ Proper heading hierarchy maintained")
+        else:
+            st.warning("⚠️ Heading hierarchy could be improved (avoid skipping levels)")
     
     # Issues
     if seo.issues:
-        st.markdown("### ⚠️ SEO Issues & Recommendations")
+        st.markdown("### ⚠️ SEO Issues & Action Items")
         
         # Group by priority
         critical_issues = [i for i in seo.issues if i.priority == "critical"]
@@ -1331,42 +1355,56 @@ def render_seo_tab(analysis):
         medium_issues = [i for i in seo.issues if i.priority == "medium"]
         
         if critical_issues:
-            st.markdown("#### 🔴 Critical Issues")
+            st.markdown("#### 🔴 Critical Issues (Fix Immediately)")
             for issue in critical_issues:
-                with st.expander(f"🔴 {issue.category}: {issue.title}"):
-                    st.write(issue.description)
+                with st.expander(f"🔴 {issue.issue}", expanded=True):
+                    st.markdown(f"**Impact:** {issue.impact}")
                     if issue.recommendation:
-                        st.info(f"💡 **Fix:** {issue.recommendation}")
+                        st.info(f"💡 **Action:** {issue.recommendation}")
         
         if high_issues:
-            st.markdown("#### 🟡 High Priority")
+            st.markdown("#### 🟡 High Priority (Fix Soon)")
             for issue in high_issues:
-                with st.expander(f"🟡 {issue.category}: {issue.title}"):
-                    st.write(issue.description)
+                with st.expander(f"🟡 {issue.issue}"):
+                    st.markdown(f"**Impact:** {issue.impact}")
                     if issue.recommendation:
-                        st.info(f"💡 **Fix:** {issue.recommendation}")
+                        st.info(f"💡 **Action:** {issue.recommendation}")
         
         if medium_issues:
-            st.markdown("#### 🔵 Medium Priority")
+            st.markdown("#### � Medium Priority (Nice to Have)")
             for issue in medium_issues:
-                with st.expander(f"🔵 {issue.category}: {issue.title}"):
-                    st.write(issue.description)
+                with st.expander(f"� {issue.issue}"):
+                    st.markdown(f"**Impact:** {issue.impact}")
                     if issue.recommendation:
-                        st.info(f"💡 **Fix:** {issue.recommendation}")
+                        st.info(f"💡 **Action:** {issue.recommendation}")
     else:
-        st.success("✅ No major SEO issues detected!")
+        st.success("✅ No major SEO issues detected! Great job!")
     
     # Recommendations
     if seo.recommendations:
-        st.markdown("### 💡 Recommendations")
-        for i, rec in enumerate(seo.recommendations, 1):
-            st.markdown(f"{i}. {rec}")
+        st.markdown("### 💡 AI-Powered SEO Recommendations")
+        st.markdown("*Specific, actionable suggestions to improve your SEO performance:*")
+        for rec in seo.recommendations:
+            st.markdown(f"• {rec}")
     
     # Opportunities
     if seo.opportunities:
         st.markdown("### 🚀 Growth Opportunities")
-        for i, opp in enumerate(seo.opportunities, 1):
-            st.markdown(f"{i}. {opp}")
+        st.markdown("*Strategic opportunities to enhance your content:*")
+        for opp in seo.opportunities:
+            st.markdown(f"• {opp}")
+    
+    # Search Intent
+    if hasattr(seo, 'search_intent') and seo.search_intent:
+        st.markdown("### 🎯 Search Intent Analysis")
+        intent_emoji = {
+            'informational': '📚',
+            'transactional': '🛒',
+            'navigational': '🧭',
+            'commercial': '💼'
+        }
+        emoji = intent_emoji.get(seo.search_intent.lower(), '🔍')
+        st.info(f"{emoji} **Detected Intent:** {seo.search_intent.title()}")
 
 
 def render_readability_tab(analysis):
@@ -1382,19 +1420,55 @@ def render_readability_tab(analysis):
     if chart:
         st.plotly_chart(chart, use_container_width=True)
     
-    # Grade level
+    # Grade level with custom styling for smaller font
     st.markdown("### 📚 Reading Level")
+    
+    # Custom CSS for smaller metric text
+    st.markdown("""
+        <style>
+        .readability-metric {
+            text-align: center;
+            padding: 10px;
+        }
+        .readability-metric .label {
+            font-size: 0.9rem;
+            color: #666;
+            margin-bottom: 5px;
+        }
+        .readability-metric .value {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: #1f77b4;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+    
     col1, col2, col3 = st.columns(3)
     
     with col1:
         reading_level = readability.readability_metrics.reading_level if readability.readability_metrics else "N/A"
-        st.metric("Reading Level", str(reading_level))
+        st.markdown(f"""
+            <div class="readability-metric">
+                <div class="label">Reading Level</div>
+                <div class="value">{reading_level}</div>
+            </div>
+        """, unsafe_allow_html=True)
     
     with col2:
-        st.metric("Target Audience", readability.target_audience_grade)
+        st.markdown(f"""
+            <div class="readability-metric">
+                <div class="label">Target Audience</div>
+                <div class="value">{readability.target_audience_grade}</div>
+            </div>
+        """, unsafe_allow_html=True)
     
     with col3:
-        st.metric("Overall Score", f"{readability.overall_score:.0f}%")
+        st.markdown(f"""
+            <div class="readability-metric">
+                <div class="label">Overall Score</div>
+                <div class="value">{readability.overall_score:.0f}%</div>
+            </div>
+        """, unsafe_allow_html=True)
     
     # Improvements
     if readability.improvements:

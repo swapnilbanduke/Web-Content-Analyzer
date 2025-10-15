@@ -63,16 +63,21 @@ class ContentStructureScore:
     """Content structure for SEO"""
     has_h1: bool
     h1_count: int
-    heading_hierarchy_correct: bool
-    paragraph_length_optimal: bool
-    content_length: int
-    content_length_score: float  # 0.0 to 1.0
-    internal_links_count: int
-    external_links_count: int
-    image_count: int
-    images_have_alt: float  # Percentage
-    use_of_lists: bool
-    use_of_bold_italic: bool
+    h2_count: int = 0
+    h3_count: int = 0
+    total_headings: int = 0
+    paragraph_count: int = 0
+    heading_hierarchy_correct: bool = True
+    proper_hierarchy: bool = True
+    paragraph_length_optimal: bool = False
+    content_length: int = 0
+    content_length_score: float = 0.0  # 0.0 to 1.0
+    internal_links_count: int = 0
+    external_links_count: int = 0
+    image_count: int = 0
+    images_have_alt: float = 0.0  # Percentage
+    use_of_lists: bool = False
+    use_of_bold_italic: bool = False
 
 
 @dataclass
@@ -222,31 +227,76 @@ class SEOAnalyzer:
         content: str,
         title: Optional[str]
     ) -> List[str]:
-        """Identify target keywords using LLM"""
+        """Identify target keywords using advanced LLM analysis"""
         
-        prompt = f"""Identify the 5-7 primary target keywords for SEO for this content.
+        prompt = f"""As an expert SEO keyword researcher, analyze this content and identify the 5-7 primary target keywords for SEO optimization.
 
 {f'Title: {title}' if title else ''}
 
 Content:
 {content[:3000]}
 
-Focus on:
-- Main topics and themes
-- Search terms users would use
-- Commercial/informational intent keywords
-- Long-tail variations
+Consider:
+1. Main topics and themes (primary keywords)
+2. Search terms users would actually use (search intent)
+3. Commercial and informational intent keywords
+4. Long-tail keyword variations (3-4 words)
+5. Semantic relevance and topic authority
+6. Search volume potential (common search phrases)
 
-Provide as comma-separated list."""
+IMPORTANT: Focus on keywords that:
+- Are actually present or implied in the content
+- Have clear search intent
+- Are specific enough to rank for
+- Include both head terms and long-tail variations
+
+Format: Return ONLY comma-separated keywords, nothing else.
+Example: web design, responsive web design, mobile friendly websites, professional website development, custom web design services"""
         
         response = await self.llm.complete(
             prompt,
-            system_prompt="You are an SEO keyword research expert.",
-            temperature=0.3
+            system_prompt="You are an expert SEO strategist specializing in keyword research and search intent analysis.",
+            temperature=0.3,
+            max_tokens=150
         )
         
-        keywords = [kw.strip() for kw in response.content.split(',')]
+        keywords = [kw.strip() for kw in response.content.split(',') if kw.strip()]
         return keywords[:7]
+    
+    async def _get_lsi_keywords(
+        self,
+        content: str,
+        primary_keywords: List[str]
+    ) -> List[str]:
+        """Get LSI (Latent Semantic Indexing) keywords for better SEO"""
+        
+        prompt = f"""Identify 10 LSI (Latent Semantic Indexing) keywords and related terms for SEO optimization.
+
+Primary Keywords: {', '.join(primary_keywords)}
+
+Content Sample:
+{content[:2000]}
+
+LSI keywords are semantically related terms that:
+- Support the main keywords
+- Appear naturally in well-optimized content
+- Help search engines understand context
+- Include synonyms, related concepts, and supporting terms
+
+Example for "coffee maker":
+LSI: brewing, espresso machine, automatic coffee, drip coffee, coffee beans, barista, french press, coffee grinder, caffeine, morning coffee
+
+Format: Return ONLY comma-separated LSI keywords."""
+        
+        response = await self.llm.complete(
+            prompt,
+            system_prompt="You are an SEO expert specializing in semantic search and LSI keyword research.",
+            temperature=0.4,
+            max_tokens=200
+        )
+        
+        lsi_keywords = [kw.strip() for kw in response.content.split(',') if kw.strip()]
+        return lsi_keywords[:10]
     
     async def _analyze_keywords(
         self,
@@ -363,7 +413,7 @@ Provide as comma-separated list."""
         content: str,
         headings: List
     ) -> ContentStructureScore:
-        """Analyze content structure for SEO"""
+        """Analyze content structure for SEO with enhanced metrics"""
         
         content_length = len(content)
         word_count = len(content.split())
@@ -374,6 +424,7 @@ Provide as comma-separated list."""
             h1_count = sum(1 for h in headings if h.level == 1)
             h2_count = sum(1 for h in headings if h.level == 2)
             h3_count = sum(1 for h in headings if h.level == 3)
+            total_headings = len(headings)
             
             # Check proper hierarchy (H1 before H2, H2 before H3, etc.)
             levels = [h.level for h in headings]
@@ -389,6 +440,7 @@ Provide as comma-separated list."""
             h1_count = sum(1 for h in headings if str(h).lower().startswith('h1:'))
             h2_count = sum(1 for h in headings if str(h).lower().startswith('h2:'))
             h3_count = sum(1 for h in headings if str(h).lower().startswith('h3:'))
+            total_headings = len(headings)
             proper_hierarchy = True  # Can't check without knowing order
         
         has_h1 = h1_count >= 1
@@ -407,8 +459,9 @@ Provide as comma-separated list."""
         # Check for formatting
         use_of_bold_italic = bool(re.search(r'\*\*\w+\*\*|\*\w+\*|__\w+__|_\w+_', content))
         
-        # Estimate paragraph length
+        # Estimate paragraph count and length
         paragraphs = [p.strip() for p in content.split('\n\n') if p.strip()]
+        paragraph_count = len(paragraphs)
         avg_para_words = sum(len(p.split()) for p in paragraphs) / len(paragraphs) if paragraphs else 0
         paragraph_length_optimal = 50 <= avg_para_words <= 150
         
@@ -417,6 +470,8 @@ Provide as comma-separated list."""
             h1_count=h1_count,
             h2_count=h2_count,
             h3_count=h3_count,
+            total_headings=total_headings,
+            paragraph_count=paragraph_count,
             proper_hierarchy=proper_hierarchy,
             heading_hierarchy_correct=proper_hierarchy,
             paragraph_length_optimal=paragraph_length_optimal,
@@ -639,11 +694,56 @@ Provide as comma-separated list."""
         issues: List[SEOIssue],
         score: SEOScore
     ) -> List[str]:
-        """Generate actionable SEO recommendations"""
+        """Generate actionable SEO recommendations using AI"""
         
         recommendations = []
         
-        # Convert top issues to recommendations
+        # If there are critical/high priority issues, create specific recommendations
+        critical_issues = [i for i in issues if i.priority in [SEOPriority.CRITICAL, SEOPriority.HIGH]]
+        
+        if critical_issues:
+            for issue in critical_issues[:5]:  # Top 5 critical issues
+                recommendations.append(f"🔴 {issue.recommendation} - {issue.impact}")
+        
+        # Use LLM for advanced recommendations based on score
+        prompt = f"""As an SEO expert, provide 5 specific, actionable SEO recommendations for this content.
+
+Current SEO Scores:
+- Overall: {score.overall_score:.1f}%
+- Content: {score.content_score:.1f}%
+- Keywords: {score.keyword_score:.1f}%
+- Technical: {score.technical_score:.1f}%
+- Structure: {score.structure_score:.1f}%
+
+Content Preview:
+{content[:1500]}
+
+Provide recommendations that:
+1. Are specific and actionable (not generic advice)
+2. Focus on quick wins and high-impact changes
+3. Consider the current content context
+4. Include keyword optimization, content structure, and technical SEO
+5. Are prioritized by potential impact
+
+Format: Return each recommendation on a new line, starting with a priority emoji (🔴 high, 🟡 medium, 🟢 nice-to-have)
+
+Example:
+🔴 Add target keyword "web design" to the first 100 words for better relevance
+🟡 Include 2-3 more subheadings (H2) to break up long paragraphs
+🟢 Add internal links to related pages to improve site structure"""
+        
+        response = await self.llm.complete(
+            prompt,
+            system_prompt="You are an expert SEO consultant providing specific, actionable optimization recommendations.",
+            temperature=0.5,
+            max_tokens=400
+        )
+        
+        # Parse LLM recommendations
+        llm_recs = [r.strip() for r in response.content.split('\n') if r.strip() and any(emoji in r for emoji in ['🔴', '🟡', '🟢'])]
+        recommendations.extend(llm_recs[:5])
+        
+        return recommendations[:10]  # Max 10 recommendations        # Convert top issues to recommendations
         for issue in issues[:5]:
             recommendations.append(issue.recommendation)
         
