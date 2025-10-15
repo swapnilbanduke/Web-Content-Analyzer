@@ -1,0 +1,6 @@
+# Streamlit UI Requirements
+# Install with: pip install -r streamlit_requirements.txt
+
+streamlit>=1.30.0
+plotly>=5.18.0
+pandas>=2.1.0
