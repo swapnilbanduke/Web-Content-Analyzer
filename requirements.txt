@@ -1,5 +1,5 @@
-# Streamlit Cloud Requirements
-# This file is specifically for Streamlit Cloud deployment
+# Web Content Analyzer - All Dependencies
+# Frontend & Backend Combined
 
 # Frontend - Streamlit UI
 streamlit==1.32.0
@@ -40,3 +40,13 @@ sentence-transformers==2.2.2
 transformers==4.35.0
 torch==2.1.0
 scikit-learn==1.3.2
+
+# Testing (optional for cloud)
+# pytest==7.4.3
+# pytest-asyncio==0.21.1
+# pytest-cov==4.1.0
+
+# Code Quality (optional for cloud)
+# black==23.11.0
+# flake8==6.1.0
+# mypy==1.7.0
