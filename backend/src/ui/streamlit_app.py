@@ -24,6 +24,11 @@ import io
 from typing import List, Dict, Any, Optional
 import sys
 from dataclasses import asdict
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Add backend to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -36,6 +41,8 @@ from src.reports import (
     ReportFormat, 
     ReportTheme
 )
+from src.storage import ContentStore, get_db
+from src.knowledge import KnowledgeBase, QASystem
 
 
 # Page configuration
@@ -398,15 +405,103 @@ async def analyze_url(
                 competitor_context = "\n".join(context_parts)
         
         # Perform analysis
-        analysis_result = await ai_service.analyze(
-            content=extracted_data.processed_text,
-            title=extracted_data.metadata.title or "Untitled",
-            meta_description=extracted_data.metadata.description,
-            url=url,
-            headings=extracted_data.headings,
-            competitor_context=competitor_context,
-            config=config
-        )
+        try:
+            analysis_result = await ai_service.analyze(
+                content=extracted_data.processed_text,
+                title=extracted_data.metadata.title or "Untitled",
+                meta_description=extracted_data.metadata.description,
+                url=url,
+                headings=extracted_data.headings,
+                competitor_context=competitor_context,
+                config=config
+            )
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"AI analysis failed: {error_msg}")
+            
+            # Return partial analysis with what we have
+            return {
+                'success': False,
+                'url': url,
+                'title': extracted_data.metadata.title or "Untitled",
+                'word_count': extracted_data.word_count,
+                'error': f"AI Analysis failed: {error_msg}. This may be due to invalid API credentials. Basic content data is still available."
+            }
+        
+        # Auto-save to knowledge base
+        try:
+            store = ContentStore()
+            
+            # Save content
+            content_id = store.save_content(
+                url=url,
+                title=extracted_data.metadata.title,
+                content=extracted_data.processed_text,
+                main_content=extracted_data.processed_text,
+                word_count=extracted_data.word_count,
+                metadata={
+                    'description': extracted_data.metadata.description,
+                    'keywords': extracted_data.metadata.keywords or [],
+                    'author': extracted_data.metadata.author,
+                    'publish_date': extracted_data.metadata.publish_date
+                },
+                headings=[{'level': h.level, 'text': h.text} for h in extracted_data.headings] if extracted_data.headings else None,
+                images=[{'src': img.src, 'alt': img.alt_text} for img in extracted_data.images] if extracted_data.images else None,
+                links=extracted_data.links if extracted_data.links else None
+            )
+            
+            # Save individual analyses
+            if analysis_result.seo:
+                store.save_analysis(
+                    content_id=content_id,
+                    analysis_type='seo',
+                    results=asdict(analysis_result.seo),
+                    scores={'overall': analysis_result.seo.score.overall_score},
+                    keywords=analysis_result.seo.primary_keywords[:10] if analysis_result.seo.primary_keywords else None,
+                    llm_model=ai_model
+                )
+            
+            if analysis_result.sentiment:
+                store.save_analysis(
+                    content_id=content_id,
+                    analysis_type='sentiment',
+                    results=asdict(analysis_result.sentiment),
+                    scores={'overall': analysis_result.sentiment.overall_sentiment_score},
+                    llm_model=ai_model
+                )
+            
+            if analysis_result.summary:
+                store.save_analysis(
+                    content_id=content_id,
+                    analysis_type='summary',
+                    results=asdict(analysis_result.summary),
+                    summary=analysis_result.summary.short_summary.text if analysis_result.summary.short_summary else None,
+                    llm_model=ai_model
+                )
+            
+            if analysis_result.readability:
+                store.save_analysis(
+                    content_id=content_id,
+                    analysis_type='readability',
+                    results=asdict(analysis_result.readability),
+                    scores={'overall': analysis_result.readability.overall_score},
+                    llm_model=ai_model
+                )
+            
+            if analysis_result.topics:
+                store.save_analysis(
+                    content_id=content_id,
+                    analysis_type='topics',
+                    results=asdict(analysis_result.topics),
+                    keywords=[t.name for t in analysis_result.topics.main_topics] if analysis_result.topics.main_topics else None,
+                    llm_model=ai_model
+                )
+            
+            logger.info(f"Saved analysis to knowledge base: content_id={content_id}")
+            
+        except Exception as e:
+            logger.error(f"Failed to save to knowledge base: {e}")
+            # Don't fail the analysis if saving fails
         
         return {
             'success': True,
@@ -643,7 +738,8 @@ def render_sidebar():
                 st.session_state.api_keys_configured = True
                 st.success("✅ API key configured")
             else:
-                st.warning("⚠️ Please enter your API key")
+                st.info("💡 Tip: Enter your API key to enable AI-powered analysis. Without it, basic analysis will still work (scraping, readability, etc.)")
+                st.session_state.api_keys_configured = False
         
         # Analysis Options
         with st.expander("📊 Analysis Options", expanded=True):
@@ -735,23 +831,24 @@ def render_single_analysis_tab(config: Dict[str, Any]):
         analyze_button = st.button("🚀 Analyze", type="primary", use_container_width=True)
     
     if analyze_button and url:
-        if not st.session_state.api_keys_configured:
-            st.error("❌ Please configure your API key in the sidebar")
-            return
-        
         with st.spinner(f"Analyzing {url}..."):
             # Run analysis
-            result = asyncio.run(analyze_url(
-                url=url,
-                ai_provider=config['ai_provider'],
-                ai_model=config['ai_model'],
-                analyze_seo=config.get('analyze_seo', True),
-                analyze_sentiment=config.get('analyze_sentiment', True),
-                analyze_readability=config.get('analyze_readability', True),
-                extract_topics=config.get('extract_topics', True),
-                include_competitive=config['include_competitive'],
-                competitor_urls=config['competitor_urls']
-            ))
+            try:
+                result = asyncio.run(analyze_url(
+                    url=url,
+                    ai_provider=config['ai_provider'],
+                    ai_model=config['ai_model'],
+                    analyze_seo=config.get('analyze_seo', True),
+                    analyze_sentiment=config.get('analyze_sentiment', True),
+                    analyze_readability=config.get('analyze_readability', True),
+                    extract_topics=config.get('extract_topics', True),
+                    include_competitive=config['include_competitive'],
+                    competitor_urls=config['competitor_urls']
+                ))
+            except Exception as e:
+                st.error(f"❌ Analysis error: {str(e)}")
+                logger.error(f"Analysis failed: {str(e)}")
+                return
             
             # Save to session state
             st.session_state.current_analysis = result
@@ -792,10 +889,6 @@ def render_batch_analysis_tab(config: Dict[str, Any]):
         st.rerun()
     
     if process_button and urls_input:
-        if not st.session_state.api_keys_configured:
-            st.error("❌ Please configure your API key in the sidebar")
-            return
-        
         urls = [url.strip() for url in urls_input.split('\n') if url.strip()]
         
         if not urls:
@@ -814,16 +907,21 @@ def render_batch_analysis_tab(config: Dict[str, Any]):
             status_text.text(f"Processing {current}/{total}: {url}")
         
         # Run batch analysis
-        results = asyncio.run(batch_analyze_urls(
-            urls=urls,
-            ai_provider=config['ai_provider'],
-            ai_model=config['ai_model'],
-            analyze_seo=config.get('analyze_seo', True),
-            analyze_sentiment=config.get('analyze_sentiment', True),
-            analyze_readability=config.get('analyze_readability', True),
-            extract_topics=config.get('extract_topics', True),
-            progress_callback=update_progress
-        ))
+        try:
+            results = asyncio.run(batch_analyze_urls(
+                urls=urls,
+                ai_provider=config['ai_provider'],
+                ai_model=config['ai_model'],
+                analyze_seo=config.get('analyze_seo', True),
+                analyze_sentiment=config.get('analyze_sentiment', True),
+                analyze_readability=config.get('analyze_readability', True),
+                extract_topics=config.get('extract_topics', True),
+                progress_callback=update_progress
+            ))
+        except Exception as e:
+            st.error(f"❌ Batch analysis error: {str(e)}")
+            logger.error(f"Batch analysis failed: {str(e)}")
+            return
         
         st.session_state.batch_results = results
         
@@ -845,9 +943,16 @@ def display_analysis_results(result: Dict[str, Any], config: Dict[str, Any]):
     """Display detailed analysis results"""
     if not result.get('success'):
         st.error(f"❌ Analysis failed: {result.get('error')}")
+        logger.error(f"Analysis display failed: {result.get('error')}")
         return
     
     analysis = result.get('analysis')
+    
+    # Check if analysis is None
+    if analysis is None:
+        st.error("❌ Analysis returned no results. This may be due to an invalid API key or network issue.")
+        logger.error("Analysis object is None")
+        return
     
     # Header
     st.markdown("---")
@@ -1942,6 +2047,190 @@ def render_history_tab():
                 st.rerun()
 
 
+def render_knowledge_base_tab():
+    """Render knowledge base browser"""
+    st.markdown("### 🗄️ Knowledge Base")
+    st.markdown("*Browse and search your saved content*")
+    
+    kb = KnowledgeBase()
+    
+    # Statistics
+    with st.expander("📊 Knowledge Base Statistics", expanded=True):
+        stats = kb.get_stats()
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Total Websites", stats.get('total_websites', 0))
+        with col2:
+            st.metric("Total Content", stats.get('total_content', 0))
+        with col3:
+            st.metric("Total Analyses", stats.get('total_analyses', 0))
+        with col4:
+            st.metric("Recent (7d)", stats.get('recent_scrapes', 0))
+    
+    # Search and filters
+    st.markdown("---")
+    col1, col2, col3 = st.columns([3, 1, 1])
+    with col1:
+        search_query = st.text_input("🔍 Search content", placeholder="Enter keywords to search...")
+    with col2:
+        domains = ['All Domains'] + kb.get_all_domains()
+        selected_domain = st.selectbox("Domain", domains)
+    with col3:
+        sort_by = st.selectbox("Sort by", ["Most Recent", "Oldest First", "Most Words"])
+    
+    # Search or list recent
+    if search_query:
+        st.markdown(f"### Search Results for: *{search_query}*")
+        filters = {}
+        if selected_domain != 'All Domains':
+            filters['domain'] = selected_domain
+        
+        results = kb.search(search_query, filters, limit=20)
+    else:
+        st.markdown("### 📝 Recent Content")
+        results = kb.get_recent_content(limit=20)
+    
+    # Display results
+    if results:
+        for result in results:
+            with st.expander(f"📄 {result.get('title', 'Untitled')}", expanded=False):
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    st.markdown(f"**URL:** {result.get('url', '')}")
+                    st.markdown(f"**Domain:** {result.get('domain', '')}")
+                    st.caption(f"Scraped: {result.get('scraped_at', '')[:16]}")
+                with col2:
+                    st.metric("Words", result.get('word_count', 0))
+                
+                # Show content preview
+                content_preview = result.get('content', '')[:500]
+                st.markdown(f"**Preview:**\n\n{content_preview}...")
+                
+                # Actions
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    if st.button("View Full", key=f"view_{result['id']}"):
+                        st.session_state['kb_selected_id'] = result['id']
+                        st.rerun()
+                with col_b:
+                    if st.button("Delete", key=f"del_{result['id']}"):
+                        kb.delete_content(result['id'])
+                        st.success("Deleted!")
+                        st.rerun()
+    else:
+        st.info("No content found. Start by analyzing some URLs in the 'Single Analysis' tab!")
+
+
+def render_qa_tab(config):
+    """Render Q&A interface"""
+    st.markdown("### ❓ Ask Questions")
+    st.markdown("*Ask questions about your stored content - answers only from your knowledge base*")
+    
+    # Initialize Q&A system
+    if 'qa_system' not in st.session_state:
+        try:
+            ai_service = create_ai_analysis_service(config=config)
+            st.session_state.qa_system = QASystem(ai_service.llm)
+        except Exception as e:
+            st.error(f"Failed to initialize Q&A system: {e}")
+            return
+    
+    qa = st.session_state.qa_system
+    kb = KnowledgeBase()
+    
+    # Show statistics
+    stats = kb.get_stats()
+    st.info(f"📚 Knowledge Base: **{stats.get('total_content', 0)} documents** available for questions")
+    
+    # Question input
+    st.markdown("---")
+    question = st.text_input(
+        "🎯 Your Question",
+        placeholder="What information can you tell me about...",
+        help="Ask questions about content in your knowledge base"
+    )
+    
+    col1, col2 = st.columns([1, 4])
+    with col1:
+        ask_button = st.button("🔍 Ask", type="primary", use_container_width=True)
+    with col2:
+        if st.button("💡 Suggest Questions", use_container_width=True):
+            with st.spinner("Generating question suggestions..."):
+                try:
+                    suggestions = asyncio.run(qa.suggest_questions(count=5))
+                    st.session_state['suggested_questions'] = suggestions
+                except Exception as e:
+                    st.error(f"Error generating suggestions: {e}")
+    
+    # Show suggested questions
+    if 'suggested_questions' in st.session_state and st.session_state['suggested_questions']:
+        st.markdown("**💡 Suggested Questions:**")
+        for i, suggestion in enumerate(st.session_state.suggested_questions):
+            if st.button(f"• {suggestion}", key=f"suggest_{i}"):
+                st.session_state['selected_question'] = suggestion
+                st.rerun()
+    
+    # Process question
+    if ask_button and question:
+        with st.spinner("🤔 Analyzing knowledge base..."):
+            try:
+                result = asyncio.run(qa.ask(question, top_k=3))
+                
+                # Display answer
+                if result.in_scope:
+                    st.markdown("### ✅ Answer")
+                    st.success(result.answer)
+                    
+                    # Show confidence
+                    st.progress(result.confidence, text=f"Confidence: {result.confidence:.0%}")
+                    
+                    # Show sources
+                    if result.sources:
+                        st.markdown("---")
+                        st.markdown("**📚 Sources Used:**")
+                        for idx, source in enumerate(result.sources, 1):
+                            with st.expander(f"{idx}. 📄 {source.get('title', 'Untitled')}"):
+                                st.markdown(f"**URL:** {source.get('url', '')}")
+                                st.markdown(f"**Relevance:** {source.get('relevance_score', 0):.1f}/100")
+                                st.caption(f"Scraped: {source.get('scraped_at', '')[:16]}")
+                else:
+                    st.markdown("### ⚠️ Cannot Answer from Knowledge Base")
+                    st.warning(result.answer)
+                    
+                    # Show what was found
+                    if result.sources:
+                        st.markdown("**Related content found (but insufficient to answer):**")
+                        for source in result.sources:
+                            st.markdown(f"- {source.get('title', 'Untitled')}")
+                
+                st.caption(f"⏱️ Processed in {result.processing_time_ms:.0f}ms")
+                
+                # Add to history
+                if 'qa_history' not in st.session_state:
+                    st.session_state.qa_history = []
+                st.session_state.qa_history.append({
+                    'question': question,
+                    'answer': result.answer,
+                    'confidence': result.confidence,
+                    'timestamp': datetime.now().isoformat()
+                })
+                
+            except Exception as e:
+                st.error(f"Error processing question: {e}")
+                import traceback
+                with st.expander("Error Details"):
+                    st.code(traceback.format_exc())
+    
+    # Q&A History
+    if 'qa_history' in st.session_state and st.session_state.qa_history:
+        st.markdown("---")
+        st.markdown("### 📜 Recent Questions")
+        for i, qa_item in enumerate(list(reversed(st.session_state.qa_history))[:5]):
+            with st.expander(f"Q: {qa_item['question']}", expanded=False):
+                st.markdown(f"**A:** {qa_item['answer'][:300]}...")
+                st.caption(f"Confidence: {qa_item.get('confidence', 0):.0%} | {qa_item.get('timestamp', '')[:16]}")
+
+
 def main():
     """Main application"""
     init_session_state()
@@ -1954,10 +2243,12 @@ def main():
     config = render_sidebar()
     
     # Main tabs
-    tab1, tab2, tab3 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "🔍 Single Analysis",
         "📋 Batch Processing",
-        "📚 History"
+        "📚 History",
+        "🗄️ Knowledge Base",
+        "❓ Ask Questions"
     ])
     
     with tab1:
@@ -1968,6 +2259,12 @@ def main():
     
     with tab3:
         render_history_tab()
+    
+    with tab4:
+        render_knowledge_base_tab()
+    
+    with tab5:
+        render_qa_tab(config)
     
     # Footer
     st.markdown("---")
