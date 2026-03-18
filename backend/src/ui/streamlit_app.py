@@ -2129,10 +2129,10 @@ def render_qa_tab(config):
     # Initialize Q&A system
     if 'qa_system' not in st.session_state:
         try:
-            ai_service = create_ai_analysis_service(
+            ai_service = asyncio.run(create_ai_analysis_service(
                 provider="openai",
                 model="gpt-4-turbo"
-            )
+            ))
             st.session_state.qa_system = QASystem(ai_service.llm)
         except Exception as e:
             st.error(f"Failed to initialize Q&A system: {e}")
