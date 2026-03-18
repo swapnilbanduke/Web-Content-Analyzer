@@ -2130,8 +2130,8 @@ def render_qa_tab(config):
     if 'qa_system' not in st.session_state:
         try:
             ai_service = asyncio.run(create_ai_analysis_service(
-                provider="openai",
-                model="gpt-4-turbo"
+                provider=config['ai_provider'].lower(),
+                model=config['ai_model']
             ))
             st.session_state.qa_system = QASystem(ai_service.llm)
         except Exception as e:
