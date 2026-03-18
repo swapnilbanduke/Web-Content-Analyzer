@@ -501,6 +501,7 @@ async def analyze_url(
             
         except Exception as e:
             logger.error(f"Failed to save to knowledge base: {e}")
+            st.warning(f"⚠️ Warning: Could not save to knowledge base: {str(e)}")
             # Don't fail the analysis if saving fails
         
         return {
