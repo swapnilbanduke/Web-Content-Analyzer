@@ -44,6 +44,15 @@ from src.reports import (
 from src.storage import ContentStore, get_db
 from src.knowledge import KnowledgeBase, QASystem
 
+# Initialize database and data directory
+Path("data").mkdir(parents=True, exist_ok=True)
+try:
+    db = get_db()  # Initialize database
+    logger.info("Database initialized successfully")
+except Exception as e:
+    logger.error(f"Failed to initialize database: {e}")
+    st.error(f"⚠️ Database initialization failed: {e}")
+
 
 # Page configuration
 st.set_page_config(
